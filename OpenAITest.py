@@ -10,7 +10,7 @@ from autogen_agentchat.messages import TextMessage
 async def main() -> None:
     model_client = OpenAIChatCompletionClient(
         model="gpt-4o-mini",
-        api_key = "YOUR_API_KEY"
+        api_key = "Your API Key"
     )
     agent = AssistantAgent(name="assistant", model_client=model_client)
 

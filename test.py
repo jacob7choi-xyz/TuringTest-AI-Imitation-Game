@@ -19,7 +19,7 @@ import json
 
 
 # Set OpenAI API key if not using environment variable
-os.environ["OPENAI_API_KEY"] = "Your_OpenAI_API_Key_Here" 
+os.environ["OPENAI_API_KEY"] = "Your API Key" 
 
 # Load the configuration from the JSON file
 OAI_CONFIG_LIST = "./config.json"

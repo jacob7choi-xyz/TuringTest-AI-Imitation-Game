@@ -16,7 +16,7 @@ async def main() -> None:
         name="weather_agent",
         model_client=OpenAIChatCompletionClient(
             model="gpt-4o-mini",
-            api_key="Your_OpenAI_API_Key_Here",
+            api_key="Your API Key",
         ),
         tools=[get_weather],
     )
