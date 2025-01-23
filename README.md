@@ -1,6 +1,6 @@
 # Turing Test Simulation: AI and Human Interaction
 
-## Author: Jacob Choi
+## Author: Jacob J. Choi
 
 ### Affiliation: Student at Colby College, majoring in Computer Science with a specialization in Artificial Intelligence (CS: AI)
 
