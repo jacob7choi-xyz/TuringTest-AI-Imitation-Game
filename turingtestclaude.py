@@ -28,12 +28,15 @@ in legal action. Use of this script is restricted to authorized personnel only.
 
 # Date: 01/07/2025 - PRESENT
 
+#CLAUDE API 
+from anthropic import Anthropic
+
+
 import asyncio
 import json
 import os
 import time
 from datetime import datetime
-from openai import InternalServerError
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.conditions import TextMentionTermination, MaxMessageTermination
@@ -104,42 +107,18 @@ async def main():
                 conv_count += 1
                 print(f"\nConversation {conv_count}/{total_convs}")
                 print(f"Interrogator Temperature: {int_temp}, Agent Temperature: {agent_temp}, Conversation Number: {conv_num}/{convs_per_combo}")
+                
+                conversation_data = await start_conversation(
+                    int_temp, 
+                    agent_temp,
+                    conv_num
+                )
 
-                #Refine the code later
-                conversation_data = None
-                maxtries = 10
-                while not conversation_data and maxtries > 0:
-                    maxtries -= 1
-                    try: 
-                        conversation_data = await start_conversation( 
-                            int_temp, 
-                            agent_temp,
-                            conv_num
-                        )
-                    except InternalServerError:
-                        conversation_data = None
-                        print(f"AN InternalServerError IS OCCURRING IN {int_temp}, {agent_temp} in Conversation {conv_num}/{convs_per_combo}")
-
-                if conversation_data:
-                    maxtries = 10
-                    result = False
-                    while not result and maxtries > 0:
-                        maxtries -= 1
-                        try: 
-                            save_conversation(conversation_data, int_temp, agent_temp)
-                            result = True
-                        except InternalServerError:
-                            result = False
-                    
-                    if result: 
-                        stats['Completed'] += 1
-                    else:
-                        stats['Failed'] += 1
-                        print(f"Failed to save conversation in {int_temp}, {agent_temp} in Conversation {conv_num}/{convs_per_combo}")
-                    print(f"Stats: {stats}")
+                if save_conversation(conversation_data, int_temp, agent_temp):
+                    stats['Completed'] += 1
                 else:
-                    print(f"No conversation for this specific combination ({int_temp}, {agent_temp})")
-
+                    stats['Failed'] += 1
+                print(f"Stats: {stats}")
     
     #for interrogator_temp from 0.1-0.9 
         #   for agent_temp from 0.1-0.9
@@ -256,7 +235,7 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
     return conversation_data
 
 
-def save_conversation(conversation_data: dict, int_temp: float, agent_temp: float):
+def save_conversation(conversation_data: dict, int_temp: float, agent_temp: float, max_retries=3):
     base_dir = "conversations"
     date_dir = conversation_data['timestamp'].split('_')[0]
     os.makedirs(f"{base_dir}/{date_dir}", exist_ok=True)
@@ -285,24 +264,33 @@ def save_conversation(conversation_data: dict, int_temp: float, agent_temp: floa
         'final_message': conversation_data['interrogator_responses'][-1].replace('\u2019', "'")
     }
 
-    
-    if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
-        with open(file_name, 'r') as f:
-            file_data = json.load(f)
-    else:
-        file_data = {
-            'temperatures': {'interrogator': int_temp, 'agent': agent_temp},
-            'conversations': []
-        }
-    
-    file_data['conversations'].append(conversation_data)
-    
-    # Use temp file
-    temp_file = f"{file_name}.temp"
-    with open(temp_file, 'w') as f:
-        json.dump(file_data, f, indent=4)
-    os.replace(temp_file, file_name)
-    print(f"\nConversation saved successfully to: {file_name}")
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
+                with open(file_name, 'r') as f:
+                    file_data = json.load(f)
+            else:
+                file_data = {
+                    'temperatures': {'interrogator': int_temp, 'agent': agent_temp},
+                    'conversations': []
+                }
+            
+            file_data['conversations'].append(conversation_data)
+            
+            # Use temp file
+            temp_file = f"{file_name}.temp"
+            with open(temp_file, 'w') as f:
+                json.dump(file_data, f, indent=4)
+            os.replace(temp_file, file_name)
+            return True
+            
+        except Exception as e:
+            print(f"Save attempt {attempt + 1} failed: {e}")
+            if attempt == max_retries - 1:
+                backup_file = f"{file_name}.backup_{int(time.time())}"
+                with open(backup_file, 'w') as f:
+                    json.dump(conversation_data, f, indent=4)
+    return False
 
 
 def clean_message_content(content: str, agent_name: str) -> str:
