@@ -87,7 +87,7 @@ async def main():
     total_combos = len(temperatures) * len(temperatures) # 5 * 5 = 25
     total_convs = total_combos * convs_per_combo  # 25 * 10 = 250
     conv_count = 0
-    stats = {'Completed': 0, 'Failed': 0}
+    stats = {'Completed': 0, 'Failed': 0, 'Total Tokens Used': 0}
 
     #Compute how many tokens we use 
     # 10 conversations per temperature combination 
@@ -133,14 +133,15 @@ async def main():
                     
                     if result: 
                         stats['Completed'] += 1
+                        stats['Total Tokens Used'] += conversation_data['total_tokens']  # Add total tokens to running total
                     else:
                         stats['Failed'] += 1
                         print(f"Failed to save conversation in {int_temp}, {agent_temp} in Conversation {conv_num}/{convs_per_combo}")
-                    print(f"Stats: {stats}")
+                    print(f"\nStats: {stats}")
+                    # This may have been done wrong!
                 else:
                     print(f"No conversation for this specific combination ({int_temp}, {agent_temp})")
-
-    
+                
     #for interrogator_temp from 0.1-0.9 
         #   for agent_temp from 0.1-0.9
             #for converation_number from 1-5
@@ -201,8 +202,12 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
         'temperatures': {
             'interrogator': interrogator_temp,
             'agent': agent_temp
+        
         },
-        'conversation_number': conversation_number
+        'conversation_number': conversation_number,
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'total_tokens': 0
     }
 
     target_agent = ai
@@ -222,11 +227,10 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
         if interrogator_response:
             interrogator_message = interrogator_response[0]
             message_content = clean_message_content(
-                interrogator_message.chat_message.content, 
-                interrogator.name
-            ).strip()
+            interrogator_message.chat_message.content, interrogator.name).strip()
             print(f"\n{interrogator.name}: {message_content}\n")
             conversation_data['interrogator_responses'].append(message_content)
+            track_tokens(interrogator_message, conversation_data)
         else:
             print("\n{interrogator.name}: No response.\n")
             break
@@ -241,6 +245,7 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
             target_message = target_response[0]
             print(f"\n{target_agent.name}: {target_message.chat_message.content}\n")
             conversation_data['target_agent_responses'].append(target_message.chat_message.content)
+            track_tokens(target_message, conversation_data)
         else:
             print(f"\n{target_agent.name}: No response.\n")
             break
@@ -261,6 +266,7 @@ def save_conversation(conversation_data: dict, int_temp: float, agent_temp: floa
     date_dir = conversation_data['timestamp'].split('_')[0]
     os.makedirs(f"{base_dir}/{date_dir}", exist_ok=True)
 
+    print(f"Tokens - Input: {conversation_data['input_tokens']}, Output: {conversation_data['output_tokens']}, Total: {conversation_data['total_tokens']}")
     file_name = f"{base_dir}/{date_dir}/conv_int{int_temp}_agent{agent_temp}.json"
 
     # Format dialogue
@@ -282,7 +288,10 @@ def save_conversation(conversation_data: dict, int_temp: float, agent_temp: floa
     conversation_data['summary'] = {
         'decision': "human" if "human!" in conversation_data['interrogator_responses'][-1] else "AI",
         'num_turns': len(conversation_data['interrogator_responses']),
-        'final_message': conversation_data['interrogator_responses'][-1].replace('\u2019', "'")
+        'final_message': conversation_data['interrogator_responses'][-1].replace('\u2019', "'"),
+        'input_tokens': conversation_data['input_tokens'],  # Add input tokens
+        'output_tokens': conversation_data['output_tokens'],  # Add output tokens
+        'total_tokens': conversation_data['total_tokens']  # Add total tokens
     }
 
     
@@ -302,7 +311,7 @@ def save_conversation(conversation_data: dict, int_temp: float, agent_temp: floa
     with open(temp_file, 'w') as f:
         json.dump(file_data, f, indent=4)
     os.replace(temp_file, file_name)
-    print(f"\nConversation saved successfully to: {file_name}")
+    print(f"\n***Conversation saved successfully to: {file_name}***")
 
 
 def clean_message_content(content: str, agent_name: str) -> str:
@@ -311,6 +320,16 @@ def clean_message_content(content: str, agent_name: str) -> str:
     if content.startswith(prefix):
         return content[len(prefix):]
     return content
+
+
+def track_tokens(message, conversation_data):
+    """Update token counts from API response."""
+    if hasattr(message.chat_message, 'models_usage'):
+        usage = message.chat_message.models_usage
+        # Accumulate tokens from each message
+        conversation_data['input_tokens'] += usage.prompt_tokens   # Add to existing total
+        conversation_data['output_tokens'] += usage.completion_tokens  # Add to existing total
+        conversation_data['total_tokens'] = conversation_data['input_tokens'] + conversation_data['output_tokens']
 
 
 # Run the main function
