@@ -32,8 +32,9 @@ import asyncio
 import json
 import os
 import time
+import random
 from datetime import datetime
-from openai import InternalServerError
+from openai import InternalServerError, RateLimitError
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.conditions import TextMentionTermination, MaxMessageTermination
@@ -41,6 +42,10 @@ from autogen_ext.models.openai import OpenAIChatCompletionClient
 from autogen_core import CancellationToken
 from autogen_agentchat.messages import TextMessage
 
+running_totals = {
+    'cumulative_input_tokens': 0,
+    'cumulative_output_tokens': 0,
+}
 
 # Define the system messages
 group_chat_system_message = (
@@ -82,10 +87,10 @@ ai_system_message = (
 # In your main function:
 async def main():
     # Define the 9 temperatures we want to test
-    temperatures = [0.1, 0.3, 0.5, 0.7, 0.9]  #0.1 for interrogator and 0.9 for ai
+    temperatures = [0.1, 0.5, 0.9]  #0.1 for interrogator and 0.9 for ai
     convs_per_combo = 10
-    total_combos = len(temperatures) * len(temperatures) # 5 * 5 = 25
-    total_convs = total_combos * convs_per_combo  # 25 * 10 = 250
+    total_combos = len(temperatures) * len(temperatures) # 3 * 3 = 9
+    total_convs = total_combos * convs_per_combo  # 9 * 10 = 90
     conv_count = 0
     stats = {'Completed': 0, 'Failed': 0, 'Total Tokens Used': 0}
 
@@ -102,7 +107,7 @@ async def main():
         for agent_temp in temperatures:
             for conv_num in range(1, convs_per_combo + 1):
                 conv_count += 1
-                print(f"\nConversation {conv_count}/{total_convs}")
+                print(f"\n\nConversation {conv_count}/{total_convs}")
                 print(f"Interrogator Temperature: {int_temp}, Agent Temperature: {agent_temp}, Conversation Number: {conv_num}/{convs_per_combo}")
 
                 #Refine the code later
@@ -116,9 +121,10 @@ async def main():
                             agent_temp,
                             conv_num
                         )
-                    except InternalServerError:
+                    except (InternalServerError, RateLimitError) as e:
                         conversation_data = None
-                        print(f"AN InternalServerError IS OCCURRING IN {int_temp}, {agent_temp} in Conversation {conv_num}/{convs_per_combo}")
+                        print(f"AN {e} OCCURRED IN {int_temp}, {agent_temp} in Conversation {conv_num}/{convs_per_combo}")
+                        time.sleep(5)
 
                 if conversation_data:
                     maxtries = 10
@@ -155,6 +161,10 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
      #Put the for loop outside. HAve it start a single convo. Outside the function
     #Have be a triple nested loop of the three different parameters
     #change the variable names!
+
+    max_retries = 5  # Set a limit for the number of retries
+    retries = 0  # Keep track of the retry count
+    backoff_factor = 2  # Exponential backoff factor
         
             # Only put it stuff we actually need!!! all the general info we dont need to use in for loop
     #Load API configuration
@@ -214,59 +224,99 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
     task = "What do you think makes humans unique compared to machines?"
     cancellation_token = CancellationToken()
     
-    for turn in range(30):  # Limit to 30 turns to match the termination condition
-        #I Want some indication that lets me know I hit the limit of 30! 
-        if turn == 29:
-            print("\nReached 30 turn limit")
-        # Interrogator sends a message
-        interrogator_response = []
-        async for message in interrogator.on_messages_stream([TextMessage(content=task, source="user")], cancellation_token):
-            interrogator_response.append(message)
+    while retries < max_retries:
+        try:
+            # Attempt to run the conversation and break out if successful
+            for turn in range(30):  # Limit to 30 turns to match the termination condition
+                #I Want some indication that lets me know I hit the limit of 30! 
+                if turn == 29:
+                    print("\nReached 30 turn limit")
+                # Interrogator sends a message
+                interrogator_response = []
+                async for message in interrogator.on_messages_stream([TextMessage(content=task, source="user")], cancellation_token):
+                    interrogator_response.append(message)
+                
+                # Get the first response
+                if interrogator_response:
+                    interrogator_message = interrogator_response[0]
+                    message_content = clean_message_content(
+                    interrogator_message.chat_message.content, interrogator.name).strip()
+                    print(f"\n{interrogator.name}: {message_content}\n")
+                    conversation_data['interrogator_responses'].append(message_content)
+                    track_tokens(interrogator_message, conversation_data)
+                else:
+                    print("\n{interrogator.name}: No response.\n")
+                    break
+
+                # Target agent (AI or Human) responds
+                target_response = []
+                async for message in target_agent.on_messages_stream([TextMessage(content=interrogator_message.chat_message.content, source="user")], cancellation_token):
+                    target_response.append(message)
+
+                # Get the first response
+                if target_response:
+                    target_message = target_response[0]
+                    print(f"\n{target_agent.name}: {target_message.chat_message.content}\n")
+                    conversation_data['target_agent_responses'].append(target_message.chat_message.content)
+                    track_tokens(target_message, conversation_data)
+                else:
+                    print(f"\n{target_agent.name}: No response.\n")
+                    break
+
+                # Check termination at the beginning of each iteration
+                if "TERMINATE" in interrogator_message.chat_message.content: #or \
+                    #target_message.chat_message.content.strip():  #Checking for an empty response!
+                    print("\nConversation terminated.")
+                    break
+
+                task = target_message.chat_message.content
+
+            return conversation_data
         
-        # Get the first response
-        if interrogator_response:
-            interrogator_message = interrogator_response[0]
-            message_content = clean_message_content(
-            interrogator_message.chat_message.content, interrogator.name).strip()
-            print(f"\n{interrogator.name}: {message_content}\n")
-            conversation_data['interrogator_responses'].append(message_content)
-            track_tokens(interrogator_message, conversation_data)
-        else:
-            print("\n{interrogator.name}: No response.\n")
-            break
+        except InternalServerError as e:
+            retries += 1
+            if retries >= max_retries:
+                print(f"Max retries reached for {int_temp}, {agent_temp} (Conversation {conv_num}/{convs_per_combo}). Aborting conversation.")
+                break
+            wait_time = backoff_factor ** retries + random.uniform(0, 1)  # Exponential backoff with jitter
+            print(f"Error... Rate Limit Hit...: {e}. Retrying in {wait_time:.2f} seconds... (Attempt {retries}/{max_retries})")
+            time.sleep(wait_time)  # Wait before retrying
 
-        # Target agent (AI or Human) responds
-        target_response = []
-        async for message in target_agent.on_messages_stream([TextMessage(content=interrogator_message.chat_message.content, source="user")], cancellation_token):
-            target_response.append(message)
-
-        # Get the first response
-        if target_response:
-            target_message = target_response[0]
-            print(f"\n{target_agent.name}: {target_message.chat_message.content}\n")
-            conversation_data['target_agent_responses'].append(target_message.chat_message.content)
-            track_tokens(target_message, conversation_data)
-        else:
-            print(f"\n{target_agent.name}: No response.\n")
-            break
-
-        # Check termination at the beginning of each iteration
-        if "TERMINATE" in interrogator_message.chat_message.content: #or \
-            #target_message.chat_message.content.strip():  #Checking for an empty response!
-            print("\nConversation terminated.")
-            break
-
-        task = target_message.chat_message.content
-
-    return conversation_data
+    # Return None if failed after retries
+    return None
 
 
 def save_conversation(conversation_data: dict, int_temp: float, agent_temp: float):
+
+    global running_totals
+
+    # Update running totals
+    running_totals['cumulative_input_tokens'] += conversation_data['input_tokens']
+    running_totals['cumulative_output_tokens'] += conversation_data['output_tokens'] 
+
     base_dir = "conversations"
     date_dir = conversation_data['timestamp'].split('_')[0]
     os.makedirs(f"{base_dir}/{date_dir}", exist_ok=True)
 
-    print(f"Tokens - Input: {conversation_data['input_tokens']}, Output: {conversation_data['output_tokens']}, Total: {conversation_data['total_tokens']}")
+    # Print current conversation stats
+    print(f"\n=== Current Conversation Stats ===")
+    print(f"Input tokens: {conversation_data['input_tokens']:,}")
+    print(f"Output tokens: {conversation_data['output_tokens']:,}")
+
+    # Print running totals
+    print(f"\n=== Running Totals ===")
+    print(f"Total input tokens: {running_totals['cumulative_input_tokens']:,}")
+    print(f"Total output tokens: {running_totals['cumulative_output_tokens']:,}")
+
+    # Calculate and print costs
+    input_cost = (running_totals['cumulative_input_tokens'] * 2.50) / 1_000_000
+    output_cost = (running_totals['cumulative_output_tokens'] * 10.00) / 1_000_000
+    total_cost = input_cost + output_cost
+    print(f"\n=== Running Costs ===")
+    print(f"Input cost: ${input_cost:.2f}")
+    print(f"Output cost: ${output_cost:.2f}")
+    print(f"Total cost: ${total_cost:.2f}")
+
     file_name = f"{base_dir}/{date_dir}/conv_int{int_temp}_agent{agent_temp}.json"
 
     # Format dialogue
@@ -291,7 +341,16 @@ def save_conversation(conversation_data: dict, int_temp: float, agent_temp: floa
         'final_message': conversation_data['interrogator_responses'][-1].replace('\u2019', "'"),
         'input_tokens': conversation_data['input_tokens'],  # Add input tokens
         'output_tokens': conversation_data['output_tokens'],  # Add output tokens
-        'total_tokens': conversation_data['total_tokens']  # Add total tokens
+        'total_tokens': conversation_data['total_tokens'],  # Add total tokens
+        'running_totals': {  # Add running totals to summary
+            'cumulative_input': running_totals['cumulative_input_tokens'],
+            'cumulative_output': running_totals['cumulative_output_tokens'],
+        },
+        'running_costs': {
+           'input_cost': round(input_cost, 2),
+           'output_cost': round(output_cost, 2),
+           'total_cost': round(total_cost, 2)
+    }
     }
 
     
