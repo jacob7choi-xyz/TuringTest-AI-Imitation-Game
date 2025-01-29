@@ -1,4 +1,4 @@
 {
-    "model": "gpt-4o-mini",
+    "model": "gpt-4o",
     "api_key": "Your API Key"
 }

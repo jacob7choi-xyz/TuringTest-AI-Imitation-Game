@@ -180,12 +180,12 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
 
     # Initialize clients
     interrogator_client = OpenAIChatCompletionClient(
-        model="gpt-4o-mini",
+        model=config["model"],
         api_key=config["api_key"],
         temperature=interrogator_temp
     )
     agent_client = OpenAIChatCompletionClient(
-        model="gpt-4o-mini",
+        model=config["model"],
         api_key=config["api_key"],
         temperature=agent_temp
     )

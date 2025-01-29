@@ -1,70 +1,83 @@
 import os
 import json
-import pandas as pd
+import csv
 
-def calculate_success_rate(conversations_dir: str):
-    """
-    Calculate the success rate of the interrogator correctly identifying the AI for each temperature combination.
-    The success rate is based on the interrogator's final decision in the conversation.
-    """
-    # Initialize a 3x3 table for success rates
-    temperatures = [0.1, 0.5, 0.9]
-    success_matrix = { (int_temp, agent_temp): 0 for int_temp in temperatures for agent_temp in temperatures}
-    total_matrix = { (int_temp, agent_temp): 0 for int_temp in temperatures for agent_temp in temperatures}
-    
-    # Iterate through the files in the provided conversations directory
-    for file_name in os.listdir(conversations_dir):
-        if file_name.endswith('.json'):
-            file_path = os.path.join(conversations_dir, file_name)
-            
-            with open(file_path, 'r') as f:
+
+def analyze_conversations(conversations_folder):
+    success_tracker = {
+        0.1: {0.1: 0, 0.5: 0, 0.9: 0},
+        0.5: {0.1: 0, 0.5: 0, 0.9: 0},
+        0.9: {0.1: 0, 0.5: 0, 0.9: 0}
+    }
+
+    print("\nAnalyzing conversations...")
+
+    for filename in os.listdir(conversations_folder):
+        if filename.endswith(".json"):
+            print(f"\nFile: {filename}")
+            with open(os.path.join(conversations_folder, filename), 'r') as f:
                 data = json.load(f)
-                for conversation in data.get('conversations', []):
-                    int_temp = conversation['temperatures']['interrogator']
-                    agent_temp = conversation['temperatures']['agent']
-                    decision = conversation['summary']['decision']
+                for conv in data['conversations']:
+                    int_temp = conv['temperatures']['interrogator'] 
+                    agent_temp = conv['temperatures']['agent']
+                    decision = conv['summary']['decision']
                     
-                    # Update total count for the combination
-                    total_matrix[(int_temp, agent_temp)] += 1
+                    print(f"Temps (Int, Agent): ({int_temp}, {agent_temp})")
+                    print(f"Decision: {decision}")
                     
-                    # Check if the interrogator's final decision was correct
-                    if (decision == "human" and "human!" in conversation['interrogator_responses'][-1]) or \
-                       (decision == "AI" and "AI!" in conversation['interrogator_responses'][-1]):
-                        # Increment the success count for this temperature combination
-                        success_matrix[(int_temp, agent_temp)] += 1
+                    # Count correct AI identifications
+                    if decision == 'AI':  # Success is when AI is correctly identified
+                        success_tracker[int_temp][agent_temp] += 1
 
-    # Calculate the success rate and store it in a new matrix
-    success_rate_matrix = {}
-    for key in success_matrix:
-        success_rate_matrix[key] = success_matrix[key] / total_matrix[key] if total_matrix[key] > 0 else 0
+    for int_temp in success_tracker:
+        for agent_temp in success_tracker[int_temp]:
+            print(f"\nInt: {int_temp}, Agent: {agent_temp}")
+            print(f"Successes: {success_tracker[int_temp][agent_temp]}/10")
 
-    # Convert the success rate matrix into a 3x3 DataFrame
-    success_df = pd.DataFrame(index=temperatures, columns=temperatures, dtype=float)
+    return success_tracker
 
-    for int_temp in temperatures:
-        for agent_temp in temperatures:
-            success_df.at[int_temp, agent_temp] = success_rate_matrix[(int_temp, agent_temp)]
 
-    return success_df
+def calculate_success_rate(success_tracker):
+    success_rate = {}
+    for interrogator_temp in success_tracker:
+        success_rate[interrogator_temp] = {}
+        for agent_temp in success_tracker[interrogator_temp]:
+            total_conversations = 10  # Total conversations per combination
+            successes = success_tracker[interrogator_temp][agent_temp]
+            success_rate[interrogator_temp][agent_temp] = successes / total_conversations
+    return success_rate
 
-def save_success_rate_to_csv(success_df: pd.DataFrame, output_file: str):
-    """
-    Save the success rate DataFrame to a CSV file.
-    """
-    success_df.to_csv(output_file, index_label="Interrogator Temperature", header=success_df.columns.tolist())
-    print(f"Success rates saved to {output_file}")
 
-# Example usage:
+def write_success_rate_csv(success_rate):
+    temperatures = [0.1, 0.5, 0.9]
+    with open("success_rate_results.csv", "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        
+        # Write header
+        writer.writerow(['Interrogator Temp'] + temperatures)
+        
+        # Write data rows
+        for int_temp in temperatures:
+            row = [int_temp]
+            for agent_temp in temperatures:
+                row.append(f"{success_rate[int_temp][agent_temp]:.2f}")
+            writer.writerow(row)
+
+    print("Success rate CSV saved to success_rate_results.csv")
+
+
 def main():
-    # Set the directory for the 2025-01-28 folder
-    conversations_dir = "conversations/2025-01-28"
-    output_file = "success_rate.csv"
-    
-    # Calculate the success rate matrix
-    success_df = calculate_success_rate(conversations_dir)
-    
-    # Save the result to a CSV file
-    save_success_rate_to_csv(success_df, output_file)
+    # Path to your conversations folder
+    conversations_folder = '/Users/jacobchoi/Desktop/Turing_Test/conversations/2025-01-29'
+
+    # Analyze the conversations
+    success_tracker = analyze_conversations(conversations_folder)
+
+    # Calculate the success rate
+    success_rate = calculate_success_rate(success_tracker)
+
+    # Write the results to a CSV file
+    write_success_rate_csv(success_rate)
 
 if __name__ == "__main__":
     main()
