@@ -87,9 +87,10 @@ ai_system_message = (
 # In your main function:
 async def main():
     # Define the 9 temperatures we want to test
-    temperatures = [0.1, 0.5, 0.9]  #0.1 for interrogator and 0.9 for ai
-    convs_per_combo = 10
-    total_combos = len(temperatures) * len(temperatures) # 3 * 3 = 9
+    interrogator_temperature = [0.5]  #0.1 for interrogator and 0.9 for ai
+    agent_temperature = [0.9]  #0.1 for interrogator and 0.9 for ai
+    convs_per_combo = 100
+    total_combos = len(interrogator_temperature) * len(agent_temperature) # 3 * 3 = 9
     total_convs = total_combos * convs_per_combo  # 9 * 10 = 90
     conv_count = 0
     stats = {'Completed': 0, 'Failed': 0, 'Total Tokens Used': 0}
@@ -103,8 +104,8 @@ async def main():
     #10 conversations per temp comination (so 250 combinations)
 
     #so 250 conversations total
-    for int_temp in temperatures:
-        for agent_temp in temperatures:
+    for int_temp in interrogator_temperature:
+        for agent_temp in agent_temperature:
             for conv_num in range(1, convs_per_combo + 1):
                 conv_count += 1
                 print(f"\n\nConversation {conv_count}/{total_convs}")
@@ -193,7 +194,7 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
     # Initialize agents
     interrogator = AssistantAgent(
         name="Interrogator",
-        system_message=one_on_one_system_message,
+        system_message=group_chat_system_message,
         model_client=interrogator_client
     )
 
@@ -203,8 +204,14 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
         model_client=agent_client
     )
 
+    human = AssistantAgent(
+        name="AgentB",
+        system_message=ai_system_message,
+        model_client=agent_client
+    )
+
     conversation_data = {
-        'system_message': one_on_one_system_message,
+        'system_message': group_chat_system_message,
         'ai_system_message': ai_system_message,
         'interrogator_responses': [],
         'target_agent_responses': [],
@@ -220,7 +227,7 @@ async def start_conversation(interrogator_temp: float, agent_temp: float, conver
         'total_tokens': 0
     }
 
-    target_agent = ai
+    target_agent = ai, human
     task = "What do you think makes humans unique compared to machines?"
     cancellation_token = CancellationToken()
     
@@ -353,7 +360,6 @@ def save_conversation(conversation_data: dict, int_temp: float, agent_temp: floa
     }
     }
 
-    
     if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
         with open(file_name, 'r') as f:
             file_data = json.load(f)
